@@ -33,7 +33,7 @@ android {
 
     buildFeatures { compose = true }
 
-    // Kotlin 1.9.23  ↔  Compose compiler 1.5.11
+    // Kotlin 1.9.23 ↔ Compose compiler 1.5.11
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.11"
     }
@@ -44,8 +44,20 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
+    // Required for Apache POI (and some other libs) on Android
     packaging {
-        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/notice.txt",
+                "META-INF/*.kotlin_module"
+            )
+        }
     }
 }
 
@@ -79,7 +91,6 @@ afterEvaluate {
 }
 
 dependencies {
-    implementation("androidx.media3:media3-exoplayer:1.8.0")
     // Compose BOM keeps UI libs in sync
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
@@ -90,21 +101,30 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
-
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("net.sourceforge.jexcelapi:jxl:2.6.12")
 
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
 
-    // Room (all versions aligned)
+    // Media (keep if you actually use it; otherwise remove)
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+
+    // --- Excel: Apache POI (choose POI; remove JXL) ---
+    implementation("org.apache.poi:poi:5.2.5")        // .xls (HSSF)
+    implementation("org.apache.poi:poi-ooxml:5.2.5")  // .xlsx (XSSF)
+
+    // REMOVE this to avoid extra weight / confusion:
+    // implementation("net.sourceforge.jexcelapi:jxl:2.6.12")
+
+    // Room
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
-    // Serialization (matches plugin)
+    // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
+    // Test
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
@@ -115,4 +135,3 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
     arg("room.incremental", "true")
 }
-

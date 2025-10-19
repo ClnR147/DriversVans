@@ -2,80 +2,71 @@ package com.example.driversvans.imports
 
 import android.content.Context
 import com.example.driversvans.model.Driver
-import com.example.driversvans.store.DriversStore
-import jxl.Workbook
+import org.apache.poi.hssf.usermodel.HSSFWorkbook
 import java.io.File
+import java.io.FileInputStream
 
 object DriversImport {
 
-    fun importFromXls(
-        context: Context,
-        xlsFile: File,
-        merge: Boolean = true,
-        sheetName: String = "Drivers"
-    ): List<Driver> {
-        require(xlsFile.exists()) { "XLS not found: ${xlsFile.absolutePath}" }
+    fun importFromXls(context: Context, file: File, merge: Boolean = true): List<Driver> {
+        if (!file.exists()) throw IllegalArgumentException("File not found: ${file.path}")
 
-        val book = Workbook.getWorkbook(xlsFile)
-        val sheet = book.getSheet(sheetName) ?: book.getSheet(0)
+        val drivers = mutableListOf<Driver>()
 
-        val headerRow = 0
-        fun idx(header: String): Int? {
-            for (c in 0 until sheet.columns) {
-                val contents = sheet.getCell(c, headerRow)?.contents?.trim().orEmpty()
-                if (contents.equals(header, ignoreCase = true)) return c
+        FileInputStream(file).use { fis ->
+            val workbook = HSSFWorkbook(fis)
+            val sheet = workbook.getSheetAt(0)
+
+            // Read header row to find columns
+            val headerRow = sheet.getRow(0)
+            val colMap = mutableMapOf<String, Int>()
+            for (cellIndex in 0 until headerRow.physicalNumberOfCells) {
+                val name = headerRow.getCell(cellIndex)?.stringCellValue?.trim()?.lowercase() ?: continue
+                colMap[name] = cellIndex
             }
-            return null
-        }
 
-        val nameCol  = idx("Name") ?: error("Header 'Name' not found")
-        val vanCol   = idx("Van") ?: idx("Unit") ?: error("Header 'Van' (or 'Unit') not found")
-        val phoneCol = idx("Phone")
-        val yearCol  = idx("Year")
-        val makeCol  = idx("Make")
-        val modelCol = idx("Model")
+            // Locate expected columns
+            val nameCol = colMap.entries.find { it.key.contains("name") }?.value
+            val vanCol = colMap.entries.find { it.key.contains("van") }?.value
+            val yearCol = colMap.entries.find { it.key.contains("year") }?.value
+            val makeCol = colMap.entries.find { it.key.contains("make") }?.value
+            val modelCol = colMap.entries.find { it.key.contains("model") }?.value
+            val phoneCol = colMap.entries.find { it.key.contains("phone") }?.value
 
-        val imported = buildList {
-            for (r in 1 until sheet.rows) {
-                val name = sheet.getCell(nameCol, r)?.contents?.trim().orEmpty()
+            if (nameCol == null) throw IllegalArgumentException("No 'Name' column found.")
+            if (vanCol == null) throw IllegalArgumentException("No 'Van' column found.")
+
+            // Loop through rows
+            for (r in 1..sheet.lastRowNum) {
+                val row = sheet.getRow(r) ?: continue
+
+                val name = row.getCell(nameCol)?.toString()?.trim().orEmpty()
                 if (name.isBlank()) continue
 
-                val van = sheet.getCell(vanCol, r)?.contents?.trim().orEmpty()
-                val phone = phoneCol?.let { sheet.getCell(it, r)?.contents?.trim().orEmpty() } ?: ""
+                val van = row.getCell(vanCol)?.toString()?.trim().orEmpty()
+                val yearStr = yearCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
+                val make = makeCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
+                val model = modelCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
+                val phone = phoneCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
 
-                val yearStr = yearCol?.let { sheet.getCell(it, r)?.contents?.trim().orEmpty() } ?: ""
-                val year = yearStr.toIntOrNull()
-                val make = makeCol?.let { sheet.getCell(it, r)?.contents?.trim().orEmpty() } ?: ""
-                val model = modelCol?.let { sheet.getCell(it, r)?.contents?.trim().orEmpty() } ?: ""
+                val year = yearStr.toDoubleOrNull()?.toInt()
+                val id = (name.lowercase() + "|" + phone).hashCode()
 
-                val id = name.lowercase().hashCode()
-                add(
-                    Driver(
-                        id = id,
-                        name = name,
-                        van = van,
-                        vanYear = year,
-                        vanMake = make,
-                        vanModel = model,
-                        phone = phone,
-                        active = true
-                    )
+                drivers += Driver(
+                    id = id,
+                    name = name,
+                    van = van,
+                    vanYear = year,
+                    vanMake = make,
+                    vanModel = model,
+                    phone = phone
                 )
             }
+
+            workbook.close()
         }
 
-        book.close()
-
-        return if (merge) {
-            val existing = DriversStore.load(context).associateBy { it.id }.toMutableMap()
-            imported.forEach { existing[it.id] = it }
-            val merged = existing.values.sortedBy { it.name.lowercase() }
-            DriversStore.save(context, merged)
-            merged
-        } else {
-            val sorted = imported.sortedBy { it.name.lowercase() }
-            DriversStore.save(context, sorted)
-            sorted
-        }
+        // ✅ Sort numerically by van number (if numeric)
+        return drivers.sortedWith(compareBy { it.van.toIntOrNull() ?: Int.MAX_VALUE })
     }
 }
