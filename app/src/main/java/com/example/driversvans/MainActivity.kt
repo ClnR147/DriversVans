@@ -3,7 +3,9 @@ package com.example.driversvans
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.* // Column, Row, padding, Arrangement, Spacer, etc.
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -15,16 +17,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.lifecycleScope
-// ❌ DO NOT import androidx.media3.exoplayer.offline.Download
 import com.example.driversvans.model.Driver
 import com.example.driversvans.store.DriversStore
 import com.example.driversvans.imports.DriversImport
+import com.example.driversvans.storage.TreeAccess
 import com.example.driversvans.ui.DriversScreen
 import com.example.driversvans.ui.theme.DriverVansTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
 
@@ -36,54 +38,138 @@ class MainActivity : ComponentActivity() {
             DriverVansTheme {
                 val ctx = LocalContext.current
                 val snackbarHostState = remember { SnackbarHostState() }
+                val scope = rememberCoroutineScope()
 
                 var drivers by remember { mutableStateOf(emptyList<Driver>()) }
                 var showAddDialog by remember { mutableStateOf(false) }
 
-                // Load on launch
-                LaunchedEffect(Unit) {
-                    drivers = DriversStore.load(ctx)
-                }
+                // ---------- Helpers (single definitions) ----------
+                fun phoneDigits(s: String) = s.filter { it.isDigit() }
 
-                // Handlers
-                fun refresh() {
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        val fresh = DriversStore.load(ctx)
-                        launch(Dispatchers.Main) { drivers = fresh }
+                fun mergeDrivers(existing: List<Driver>, imported: List<Driver>): List<Driver> {
+                    // Key primarily by (name|phoneDigits); fallback to (name|van)
+                    fun keyOf(d: Driver): String {
+                        val phoneKey = phoneDigits(d.phone)
+                        return if (phoneKey.isNotEmpty())
+                            d.name.trim().lowercase() + "|" + phoneKey
+                        else
+                            d.name.trim().lowercase() + "|van:" + d.van.trim().lowercase()
                     }
+
+                    val byKey = existing.associateBy(::keyOf).toMutableMap()
+
+                    for (imp in imported) {
+                        val k = keyOf(imp)
+                        val prev = byKey[k]
+                        if (prev == null) {
+                            val newId = abs((imp.name.trim().lowercase() + "|" + phoneDigits(imp.phone)).hashCode())
+                            byKey[k] = imp.copy(id = newId)
+                        } else {
+                            byKey[k] = prev.copy(
+                                name    = imp.name.ifBlank { prev.name },
+                                van     = imp.van.ifBlank { prev.van },
+                                vanYear = imp.vanYear ?: prev.vanYear,
+                                vanMake = if (imp.vanMake.isNotBlank()) imp.vanMake else prev.vanMake,
+                                vanModel= if (imp.vanModel.isNotBlank()) imp.vanModel else prev.vanModel,
+                                phone   = if (imp.phone.isNotBlank()) imp.phone else prev.phone
+                            )
+                        }
+                    }
+
+                    return byKey.values.sortedWith(compareBy { it.van.toIntOrNull() ?: Int.MAX_VALUE })
                 }
 
-                fun importFromXls() {
-                    // Adjust this path to where Syncthing drops your spreadsheet
-                    // e.g. C:/AutoSyncToPhone/DriverVans on PC → /storage/emulated/0/DriverVans on phone
-                    val xlsPath = "/storage/emulated/0/DriverVans/Drivers.xls"
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        val f = File(xlsPath)
-                        try {
-                            val list = DriversImport.importFromXls(ctx, f, merge = true)
-                            launch(Dispatchers.Main) {
-                                drivers = list
-                                snackbarHostState.showSnackbar("Imported ${list.size} drivers from spreadsheet.")
-                            }
-                        } catch (e: Exception) {
-                            launch(Dispatchers.Main) {
+                // ---------- One-time folder grant launcher ----------
+                val grantFolderLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocumentTree()
+                ) { uri ->
+                    if (uri != null) {
+                        TreeAccess.saveTreeUri(ctx, uri)
+                        // Immediately attempt first import after grant
+                        scope.launch {
+                            try {
+                                val imported = withContext(Dispatchers.IO) {
+                                    DriversImport.importFromPersistedFolder(ctx, fileName = "Drivers.xls")
+                                }
+                                val existing = withContext(Dispatchers.IO) { DriversStore.load(ctx) }
+                                val merged = mergeDrivers(existing, imported)
+
+                                // Persist merged set using upsert loop (works without replaceAll)
+                                withContext(Dispatchers.IO) {
+                                    var acc = existing
+                                    for (d in merged) {
+                                        acc = DriversStore.upsert(ctx, d)
+                                    }
+                                }
+
+                                val fresh = withContext(Dispatchers.IO) { DriversStore.load(ctx) }
+                                drivers = fresh.sortedWith(compareBy { it.van.toIntOrNull() ?: Int.MAX_VALUE })
+
+                                snackbarHostState.showSnackbar("Imported ${imported.size} rows. ${fresh.size} total after merge.")
+                            } catch (e: Exception) {
                                 snackbarHostState.showSnackbar("Import failed: ${e.message ?: "unknown error"}")
                             }
                         }
                     }
                 }
 
-                fun addDriver(d: Driver) {
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        val updated = DriversStore.upsert(ctx, d)
-                        launch(Dispatchers.Main) {
-                            drivers = updated
-                            snackbarHostState.showSnackbar("Saved ${d.name}")
+                // Load on launch
+                LaunchedEffect(Unit) {
+                    drivers = withContext(Dispatchers.IO) { DriversStore.load(ctx) }
+                }
+
+                // ---------- Handlers ----------
+                fun refresh() {
+                    scope.launch {
+                        val fresh = withContext(Dispatchers.IO) { DriversStore.load(ctx) }
+                        drivers = fresh
+                        snackbarHostState.showSnackbar("Refreshed ${fresh.size} drivers.")
+                    }
+                }
+
+                fun importFromXls() {
+                    scope.launch {
+                        if (TreeAccess.getTreeUri(ctx) == null) {
+                            snackbarHostState.showSnackbar("Pick the DriverVans folder once to allow imports.")
+                            grantFolderLauncher.launch(null)
+                            return@launch
+                        }
+
+                        try {
+                            val imported = withContext(Dispatchers.IO) {
+                                DriversImport.importFromPersistedFolder(ctx, fileName = "Drivers.xls")
+                            }
+                            val existing = withContext(Dispatchers.IO) { DriversStore.load(ctx) }
+                            val merged = mergeDrivers(existing, imported)
+
+                            // ✅ Persist the WHOLE merged list in one go (no overwrites, no partials)
+                            withContext(Dispatchers.IO) {
+                                DriversStore.replaceAll(ctx, merged)
+                            }
+
+                            // Reload for UI (already sorted by replaceAll)
+                            val fresh = withContext(Dispatchers.IO) { DriversStore.load(ctx) }
+                            drivers = fresh
+
+                            snackbarHostState.showSnackbar(
+                                "Imported ${imported.size} rows. ${fresh.size} total after merge."
+                            )
+                        } catch (e: Exception) {
+                            snackbarHostState.showSnackbar("Import failed: ${e.message ?: "unknown error"}")
                         }
                     }
                 }
 
-                // UI
+
+                fun addDriver(d: Driver) {
+                    scope.launch {
+                        val updated = withContext(Dispatchers.IO) { DriversStore.upsert(ctx, d) }
+                        drivers = updated
+                        snackbarHostState.showSnackbar("Saved ${d.name}")
+                    }
+                }
+
+                // ---------- UI ----------
                 Scaffold(
                     topBar = {
                         TopAppBar(
@@ -108,8 +194,8 @@ class MainActivity : ComponentActivity() {
                     DriversScreen(
                         allDrivers = drivers,
                         onRefresh = ::refresh,
-                        onImport = ::importFromXls,       // optional; also exposed via the top bar button
-                        onAdd = { showAddDialog = true }, // optional; also exposed via FAB
+                        onImport = ::importFromXls,
+                        onAdd = { showAddDialog = true },
                         onDriverClick = { /* open editor later if you add one */ },
                         modifier = Modifier.padding(padding)
                     )
@@ -119,7 +205,7 @@ class MainActivity : ComponentActivity() {
                     AddDriverDialog(
                         onDismiss = { showAddDialog = false },
                         onSave = { name, van, yearStr, make, model, phone ->
-                            val id = name.trim().lowercase().hashCode()
+                            val id = abs((name.trim().lowercase() + "|" + phone.trim()).hashCode())
                             val year = yearStr.toIntOrNull()
                             val d = Driver(
                                 id = id,
@@ -160,7 +246,7 @@ private fun AddDriverDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Driver Name") }, singleLine = true)
-                OutlinedTextField(value = van, onValueChange = { van = it }, label = { Text("Van (e.g. Van #12)") }, singleLine = true)
+                OutlinedTextField(value = van, onValueChange = { van = it }, label = { Text("Van (number only)") }, singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = year, onValueChange = { year = it },
@@ -183,9 +269,7 @@ private fun AddDriverDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = {
-                    if (name.isNotBlank()) onSave(name, van, year, make, model, phone)
-                }
+                onClick = { if (name.isNotBlank()) onSave(name, van, year, make, model, phone) }
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }

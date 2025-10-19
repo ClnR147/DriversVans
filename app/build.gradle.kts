@@ -106,6 +106,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
 
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("org.apache.poi:poi:5.2.5")
+    implementation("org.apache.poi:poi-ooxml:5.2.5")
+
+
     // Media (keep if you actually use it; otherwise remove)
     implementation("androidx.media3:media3-exoplayer:1.8.0")
 

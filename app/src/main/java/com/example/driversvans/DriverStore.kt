@@ -23,7 +23,9 @@ private data class DriverDTO(
 )
 
 private fun DriverDTO.toModel() = Driver(
-    id, name, van,
+    id = id,
+    name = name,
+    van = van,
     vanYear = vanYear,
     vanMake = vanMake,
     vanModel = vanModel,
@@ -32,7 +34,10 @@ private fun DriverDTO.toModel() = Driver(
 )
 
 private fun Driver.toDto() = DriverDTO(
-    id, name, van, phone,
+    id = id,
+    name = name,
+    van = van,
+    phone = phone,
     vanYear = vanYear,
     vanMake = vanMake,
     vanModel = vanModel,
@@ -44,6 +49,12 @@ object DriversStore {
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
     private fun file(context: Context) = File(context.filesDir, FILE_NAME)
+
+    private fun sortDrivers(list: List<Driver>): List<Driver> =
+        list.sortedWith(
+            compareBy<Driver> { it.van.toIntOrNull() ?: Int.MAX_VALUE }
+                .thenBy { it.name.lowercase() }
+        )
 
     fun load(context: Context): List<Driver> {
         val f = file(context)
@@ -57,19 +68,27 @@ object DriversStore {
         file(context).writeText(json.encodeToString(ListSerializer(DriverDTO.serializer()), dtos))
     }
 
+    /** 🔹 Bulk replace the entire store with the provided list (after sorting). */
+    fun replaceAll(context: Context, drivers: List<Driver>): List<Driver> {
+        val sorted = sortDrivers(drivers)
+        save(context, sorted)
+        return sorted
+    }
+
+    /** Upsert a single driver; returns the updated, sorted list. */
     fun upsert(context: Context, driver: Driver): List<Driver> {
         val list = load(context).toMutableList()
         val idx = list.indexOfFirst { it.id == driver.id }
         if (idx >= 0) list[idx] = driver else list.add(driver)
-        list.sortBy { it.name.lowercase() }
-        save(context, list)
-        return list
+        val sorted = sortDrivers(list)
+        save(context, sorted)
+        return sorted
     }
 
     fun setActive(context: Context, id: Int, active: Boolean): List<Driver> {
-        val list = load(context).map { if (it.id == id) it.copy(active = active) else it }
-            .sortedBy { it.name.lowercase() }
-        save(context, list)
-        return list
+        val updated = load(context).map { if (it.id == id) it.copy(active = active) else it }
+        val sorted = sortDrivers(updated)
+        save(context, sorted)
+        return sorted
     }
 }
