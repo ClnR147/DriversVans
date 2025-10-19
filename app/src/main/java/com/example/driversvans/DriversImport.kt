@@ -8,6 +8,8 @@ import com.example.driversvans.storage.TreeAccess
 import org.apache.poi.hssf.usermodel.HSSFWorkbook
 import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import org.apache.poi.ss.usermodel.CellType
+import org.apache.poi.ss.usermodel.DataFormatter
 
 object DriversImport {
 
@@ -49,14 +51,16 @@ object DriversImport {
         error("Unable to read spreadsheet at $uri")
     }
 
+    private val dataFormatter = DataFormatter()
+
     /** Map the sheet to Driver list. Only reads: Name, Van, Year, Make, Model, Phone. */
     private fun parseSheet(sheet: Sheet): List<Driver> {
         val header = sheet.getRow(0) ?: return emptyList()
 
         val cols = buildMap<String, Int> {
             for (i in 0 until header.physicalNumberOfCells) {
-                val key = header.getCell(i)?.toString()?.trim()?.lowercase() ?: continue
-                put(key, i)
+                val key = dataFormatter.formatCellValue(header.getCell(i)).trim().lowercase()
+                if (key.isNotEmpty()) put(key, i)
             }
         }
         val nameCol  = cols.entries.find { it.key.contains("name") }?.value
@@ -73,14 +77,37 @@ object DriversImport {
         for (r in 1..sheet.lastRowNum) {
             val row = sheet.getRow(r) ?: continue
 
-            val name = row.getCell(nameCol)?.toString()?.trim().orEmpty()
+            // NAME
+            val name = dataFormatter.formatCellValue(row.getCell(nameCol)).trim()
             if (name.isBlank()) continue
 
-            val van    = row.getCell(vanCol)?.toString()?.trim().orEmpty()   // number-only per your sheet
-            val year   = yearCol?.let { row.getCell(it)?.toString()?.toDoubleOrNull()?.toInt() }
-            val make   = makeCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
-            val model  = modelCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
-            val phone  = phoneCol?.let { row.getCell(it)?.toString()?.trim().orEmpty() }.orEmpty()
+            // VAN: coerce numeric like 964.0 -> "964"
+            val vanCell = row.getCell(vanCol)
+            val van = when {
+                vanCell == null -> ""
+                vanCell.cellType == CellType.NUMERIC -> {
+                    val n = vanCell.numericCellValue
+                    if (n % 1.0 == 0.0) n.toLong().toString() else dataFormatter.formatCellValue(vanCell).trim()
+                }
+                else -> dataFormatter.formatCellValue(vanCell).trim()
+            }
+
+            // YEAR: parse as Int? (works for "2017" or 2017.0)
+            val year = yearCol?.let { cIdx ->
+                val c = row.getCell(cIdx)
+                if (c == null) null else when (c.cellType) {
+                    CellType.NUMERIC -> {
+                        val n = c.numericCellValue
+                        if (n % 1.0 == 0.0) n.toInt() else n.toInt() // floor; adjust if needed
+                    }
+                    else -> dataFormatter.formatCellValue(c).trim().toDoubleOrNull()?.toInt()
+                }
+            }
+
+            // MAKE/MODEL/PHONE via formatter for consistency
+            val make  = makeCol?.let { dataFormatter.formatCellValue(row.getCell(it)).trim() }.orEmpty()
+            val model = modelCol?.let { dataFormatter.formatCellValue(row.getCell(it)).trim() }.orEmpty()
+            val phone = phoneCol?.let { dataFormatter.formatCellValue(row.getCell(it)).trim() }.orEmpty()
 
             val id = (name.lowercase() + "|" + phone).hashCode()
             drivers += Driver(
