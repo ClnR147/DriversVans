@@ -27,14 +27,11 @@ fun DriversScreen(
     onRefresh: () -> Unit = {},
     onImport: (() -> Unit)? = null,
     onAdd: (() -> Unit)? = null,
-    onDriverClick: (Driver) -> Unit = {}, // still available if you want to hook edit later
+    onDriverClick: (Driver) -> Unit = {}, // optional callback
     modifier: Modifier = Modifier
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val results = remember(query, allDrivers) { searchDrivers(allDrivers, query) }
-
-    // Selected driver for the detail dialog
-    var selected by remember { mutableStateOf<Driver?>(null) }
 
     Column(modifier.fillMaxSize()) {
 
@@ -89,144 +86,104 @@ fun DriversScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(results, key = { it.id }) { driver ->
-                    DriverRowCompact(
+                    DriverCardCompact(
                         driver = driver,
-                        onClick = {
-                            selected = driver          // show details on tap
-                            onDriverClick(driver)      // still callbacks if you use it elsewhere
-                        }
+                        onClick = { onDriverClick(driver) }
                     )
                 }
             }
         }
     }
-
-    // Details dialog
-    selected?.let { d ->
-        DriverDetailsDialog(
-            driver = d,
-            onDismiss = { selected = null }
-        )
-    }
 }
 
-/** Compact single-line row: [PILL VAN]  Name  …  Phone (clickable) */
+/* -------------------- Helpers -------------------- */
+
+private fun formatPhoneDots(raw: String): String {
+    val digits = raw.filter { it.isDigit() }
+    return if (digits.length == 10) {
+        "${digits.substring(0, 3)}.${digits.substring(3, 6)}.${digits.substring(6)}"
+    } else raw.trim()
+}
+
+/** Three-line card:
+ *  Row 1  Name
+ *  Row 2  Van: {Van Number} • {Year} {Make} {Model}
+ *  Row 3  Phone: {xxx.xxx.xxxx} (tap to dial)
+ */
 @Composable
-private fun DriverRowCompact(
+private fun DriverCardCompact(
     driver: Driver,
     onClick: () -> Unit
 ) {
     val ctx = LocalContext.current
 
-    // Prebuild dial intent
     val dialIntent = remember(driver.phone) {
         if (driver.phone.isNotBlank()) {
             Intent(
                 Intent.ACTION_DIAL,
-                Uri.parse("tel:${driver.phone.filter { ch -> ch.isDigit() || ch == '+' }}")
+                Uri.parse("tel:${driver.phone.filter { it.isDigit() || it == '+' }}")
             )
         } else null
+    }
+
+    val vanNumber = driver.van.ifBlank { "—" }
+    val ymm = listOfNotNull(
+        driver.vanYear?.toString(),
+        driver.vanMake.takeIf { it.isNotBlank() },
+        driver.vanModel.takeIf { it.isNotBlank() }
+    ).joinToString(" ").trim()
+
+    val row2 = buildString {
+        append("Van: ")
+        append(vanNumber)
+        if (ymm.isNotEmpty()) {
+            append(" • ")
+            append(ymm)
+        }
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
             .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            // Van pill
-            Surface(
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                contentColor = MaterialTheme.colorScheme.primary,
-                shape = MaterialTheme.shapes.small
-            ) {
-                Text(
-                    text = driver.van.ifBlank { "Van" },
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-            }
-
-            Spacer(Modifier.width(8.dp))
-
-            // Name (expand)
+            // Row 1 – Name
             Text(
                 text = driver.name,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                overflow = TextOverflow.Ellipsis
             )
 
-            // Right-aligned clickable phone number (no “Call” text)
+            // Row 2 – Van info
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = row2,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            // Row 3 – Phone (click-to-dial)
             if (driver.phone.isNotBlank() && dialIntent != null) {
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = driver.phone,
-                    style = MaterialTheme.typography.labelLarge,
+                    text = "Phone: ${formatPhoneDots(driver.phone)}",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.clickable { ctx.startActivity(dialIntent) }
                 )
             }
         }
     }
-}
-
-/** Simple details dialog with full driver info and tap-to-dial number. */
-@Composable
-private fun DriverDetailsDialog(
-    driver: Driver,
-    onDismiss: () -> Unit
-) {
-    val ctx = LocalContext.current
-    val dialIntent = remember(driver.phone) {
-        if (driver.phone.isNotBlank()) {
-            Intent(
-                Intent.ACTION_DIAL,
-                Uri.parse("tel:${driver.phone.filter { ch -> ch.isDigit() || ch == '+' }}")
-            )
-        } else null
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(driver.name) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Full van info
-                val vanFull = driver.vanFullLabel.ifBlank { driver.van }
-                if (vanFull.isNotBlank()) Text("Van: $vanFull")
-                // Individual fields (helpful if some are missing in full label)
-                if (driver.vanYear != null || driver.vanMake.isNotBlank() || driver.vanModel.isNotBlank()) {
-                    val year = driver.vanYear?.toString().orEmpty()
-                    val make = driver.vanMake
-                    val model = driver.vanModel
-                    Text("Details: " + listOf(year, make, model).filter { it.isNotBlank() }.joinToString(" "))
-                }
-                if (driver.van.isNotBlank()) Text("Label: ${driver.van}")
-
-                if (driver.phone.isNotBlank()) {
-                    TextButton(
-                        onClick = { dialIntent?.let(ctx::startActivity) }
-                    ) {
-                        Text(driver.phone) // clickable number, no “Call” text
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        }
-    )
 }
 
 /** Empty/search state */
