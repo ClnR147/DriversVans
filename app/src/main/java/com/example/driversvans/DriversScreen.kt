@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -27,7 +28,8 @@ fun DriversScreen(
     onRefresh: () -> Unit = {},
     onImport: (() -> Unit)? = null,
     onAdd: (() -> Unit)? = null,
-    onDriverClick: (Driver) -> Unit = {}, // optional callback
+    onDriverClick: (Driver) -> Unit = {},
+    onDelete: (Driver) -> Unit = {}, // callback for delete
     modifier: Modifier = Modifier
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -88,7 +90,8 @@ fun DriversScreen(
                 items(results, key = { it.id }) { driver ->
                     DriverCardCompact(
                         driver = driver,
-                        onClick = { onDriverClick(driver) }
+                        onClick = { onDriverClick(driver) },
+                        onDelete = { onDelete(driver) } // <- comma fixed and wired
                     )
                 }
             }
@@ -109,11 +112,13 @@ private fun formatPhoneDots(raw: String): String {
  *  Row 1  Name
  *  Row 2  Van: {Van Number} • {Year} {Make} {Model}
  *  Row 3  Phone: {xxx.xxx.xxxx} (tap to dial)
+ *  + Top-right trash icon to delete
  */
 @Composable
 private fun DriverCardCompact(
     driver: Driver,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: (Driver) -> Unit
 ) {
     val ctx = LocalContext.current
 
@@ -148,39 +153,54 @@ private fun DriverCardCompact(
             .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            // Row 1 – Name
-            Text(
-                text = driver.name,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            // Content
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(end = 40.dp) // leave space so text doesn't hide under the trash icon
+            ) {
+                // Row 1 – Name
+                Text(
+                    text = driver.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
 
-            // Row 2 – Van info
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = row2,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            // Row 3 – Phone (click-to-dial)
-            if (driver.phone.isNotBlank() && dialIntent != null) {
+                // Row 2 – Van info
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Phone: ${formatPhoneDots(driver.phone)}",
+                    text = row2,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.clickable { ctx.startActivity(dialIntent) }
+                    overflow = TextOverflow.Ellipsis
                 )
+
+                // Row 3 – Phone (click-to-dial)
+                if (driver.phone.isNotBlank() && dialIntent != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Phone: ${formatPhoneDots(driver.phone)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable { ctx.startActivity(dialIntent) }
+                    )
+                }
+            }
+
+            // Top-right delete icon
+            IconButton(
+                onClick = { onDelete(driver) },
+                modifier = Modifier.align(Alignment.TopEnd)
+            ) {
+                Icon(Icons.Filled.Delete, contentDescription = "Delete")
             }
         }
     }

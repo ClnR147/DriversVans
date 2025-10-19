@@ -84,6 +84,19 @@ object DriversStore {
         save(context, sorted)
         return sorted
     }
+    // Add to DriversStore object
+    fun delete(context: Context, id: Int): List<Driver> {
+        val updated = load(context).filterNot { it.id == id }
+        save(context, updated)
+        return updated
+    }
+
+    fun deleteMany(context: Context, ids: Collection<Int>): List<Driver> {
+        val set = ids.toSet()
+        val updated = load(context).filterNot { it.id in set }
+        save(context, updated)
+        return updated
+    }
 
     fun setActive(context: Context, id: Int, active: Boolean): List<Driver> {
         val updated = load(context).map { if (it.id == id) it.copy(active = active) else it }

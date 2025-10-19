@@ -127,6 +127,26 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun deleteDriver(d: Driver) {
+                    scope.launch {
+                        val beforeDelete = drivers // keep a snapshot for undo
+                        val afterDelete = withContext(Dispatchers.IO) { DriversStore.delete(ctx, d.id) }
+                        drivers = afterDelete
+
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Deleted ${d.name}",
+                            actionLabel = "Undo",
+                            withDismissAction = true
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            // Undo by re-adding the driver that was deleted
+                            val restored = withContext(Dispatchers.IO) { DriversStore.upsert(ctx, d) }
+                            drivers = restored
+                            snackbarHostState.showSnackbar("Restored ${d.name}")
+                        }
+                    }
+                }
+
                 fun importFromXls() {
                     scope.launch {
                         if (TreeAccess.getTreeUri(ctx) == null) {
@@ -197,6 +217,7 @@ class MainActivity : ComponentActivity() {
                         onImport = ::importFromXls,
                         onAdd = { showAddDialog = true },
                         onDriverClick = { /* open editor later if you add one */ },
+                        onDelete = ::deleteDriver,                  // 👈 pass the callback here
                         modifier = Modifier.padding(padding)
                     )
                 }
